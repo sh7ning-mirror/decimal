@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"math/rand"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -70,6 +69,8 @@ var testTableScientificNotation = map[string]string{
 	"1.2345E-1":  "0.12345",
 	"0e5":        "0",
 	"0e-5":       "0",
+	"0.e0":       "0",
+	".0e0":       "0",
 	"123.456e0":  "123.456",
 	"123.456e2":  "12345.6",
 	"123.456e10": "1234560000000",
@@ -199,47 +200,6 @@ func TestNewFromFloat32Quick(t *testing.T) {
 	}
 }
 
-func BenchmarkNewFromFloatWithExponent(b *testing.B) {
-	rng := rand.New(rand.NewSource(0xdead1337))
-	in := make([]float64, b.N)
-	for i := range in {
-		in[i] = rng.NormFloat64() * 10e20
-	}
-	b.ReportAllocs()
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		in := rng.NormFloat64() * 10e20
-		_ = NewFromFloatWithExponent(in, math.MinInt32)
-	}
-}
-
-func BenchmarkNewFromFloat(b *testing.B) {
-	rng := rand.New(rand.NewSource(0xdead1337))
-	in := make([]float64, b.N)
-	for i := range in {
-		in[i] = rng.NormFloat64() * 10e20
-	}
-	b.ReportAllocs()
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		_ = NewFromFloat(in[i])
-	}
-}
-
-func BenchmarkNewFromStringFloat(b *testing.B) {
-	rng := rand.New(rand.NewSource(0xdead1337))
-	in := make([]float64, b.N)
-	for i := range in {
-		in[i] = rng.NormFloat64() * 10e20
-	}
-	b.ReportAllocs()
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		in := strconv.FormatFloat(in[i], 'f', -1, 64)
-		_, _ = NewFromString(in)
-	}
-}
-
 func TestNewFromString(t *testing.T) {
 	for _, x := range testTable {
 		s := x.short
@@ -350,8 +310,9 @@ func TestNewFromStringDeepEquals(t *testing.T) {
 	}
 	tests := []StrCmp{
 		{"1", "1", true},
-		{"10", "10.0", true},
-		{"1.1", "1.10", true},
+		{"1.0", "1.0", true},
+		{"10", "10.0", false},
+		{"1.1", "1.10", false},
 		{"1.001", "1.01", false},
 	}
 
@@ -471,6 +432,56 @@ func TestNewFromFloatWithExponent(t *testing.T) {
 		var d Decimal
 		if !didPanic(func() { d = NewFromFloatWithExponent(n, 0) }) {
 			t.Fatalf("Expected panic when creating a Decimal from %v, got %v instead", n, d.String())
+		}
+	}
+}
+
+func TestNewFromInt(t *testing.T) {
+	tests := map[int64]string{
+		0:                   "0",
+		1:                   "1",
+		323412345:           "323412345",
+		9223372036854775807: "9223372036854775807",
+	}
+
+	// add negatives
+	for p, s := range tests {
+		if p > 0 {
+			tests[-p] = "-" + s
+		}
+	}
+
+	for input, s := range tests {
+		d := NewFromInt(input)
+		if d.String() != s {
+			t.Errorf("expected %s, got %s (%s, %d)",
+				s, d.String(),
+				d.value.String(), d.exp)
+		}
+	}
+}
+
+func TestNewFromInt32(t *testing.T) {
+	tests := map[int32]string{
+		0:          "0",
+		1:          "1",
+		323412345:  "323412345",
+		2147483647: "2147483647",
+	}
+
+	// add negatives
+	for p, s := range tests {
+		if p > 0 {
+			tests[-p] = "-" + s
+		}
+	}
+
+	for input, s := range tests {
+		d := NewFromInt32(input)
+		if d.String() != s {
+			t.Errorf("expected %s, got %s (%s, %d)",
+				s, d.String(),
+				d.value.String(), d.exp)
 		}
 	}
 }
@@ -807,22 +818,6 @@ func TestDecimal_Floor(t *testing.T) {
 	for _, test := range testsWithDecimals {
 		expected, _ := NewFromString(test.expected)
 		assertFloor(test.input, expected)
-	}
-}
-
-func Benchmark_FloorFast(b *testing.B) {
-	input := New(200, 2)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		input.Floor()
-	}
-}
-
-func Benchmark_FloorRegular(b *testing.B) {
-	input := New(200, -2)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		input.Floor()
 	}
 }
 
@@ -1473,44 +1468,6 @@ func (d Decimal) DivOld(d2 Decimal, prec int) Decimal {
 	return ret
 }
 
-func Benchmark_DivideOriginal(b *testing.B) {
-	tcs := createDivTestCases()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, tc := range tcs {
-			d := tc.d
-			if sign(tc.d2) == 0 {
-				continue
-			}
-			d2 := tc.d2
-			prec := tc.prec
-			a := d.DivOld(d2, int(prec))
-			if sign(a) > 2 {
-				panic("dummy panic")
-			}
-		}
-	}
-}
-
-func Benchmark_DivideNew(b *testing.B) {
-	tcs := createDivTestCases()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, tc := range tcs {
-			d := tc.d
-			if sign(tc.d2) == 0 {
-				continue
-			}
-			d2 := tc.d2
-			prec := tc.prec
-			a := d.DivRound(d2, prec)
-			if sign(a) > 2 {
-				panic("dummy panic")
-			}
-		}
-	}
-}
-
 func sign(d Decimal) int {
 	return d.value.Sign()
 }
@@ -1609,14 +1566,6 @@ func TestDecimal_RoundCash(t *testing.T) {
 		{"3.95", 10, "4.00"},
 		{"395", 10, "395"},
 
-		{"6.42", 15, "6.40"},
-		{"6.39", 15, "6.40"},
-		{"6.35", 15, "6.30"},
-		{"6.36", 15, "6.40"},
-		{"6.349", 15, "6.30"},
-		{"6.30", 15, "6.30"},
-		{"666", 15, "666"},
-
 		{"3.23", 25, "3.25"},
 		{"3.33", 25, "3.25"},
 		{"3.53", 25, "3.50"},
@@ -1652,7 +1601,7 @@ func TestDecimal_RoundCash_Panic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			if have, ok := r.(string); ok {
-				const want = "Decimal does not support this Cash rounding interval `231`. Supported: 5, 10, 15, 25, 50, 100"
+				const want = "Decimal does not support this Cash rounding interval `231`. Supported: 5, 10, 25, 50, 100"
 				if want != have {
 					t.Errorf("\nWant: %q\nHave: %q", want, have)
 				}
@@ -1665,26 +1614,6 @@ func TestDecimal_RoundCash_Panic(t *testing.T) {
 	}()
 	d, _ := NewFromString("1")
 	d.RoundCash(231)
-}
-
-func BenchmarkDecimal_RoundCash_Five(b *testing.B) {
-	const want = "3.50"
-	for i := 0; i < b.N; i++ {
-		val := New(3478, -3)
-		if have := val.StringFixedCash(5); have != want {
-			b.Fatalf("\nHave: %q\nWant: %q", have, want)
-		}
-	}
-}
-
-func BenchmarkDecimal_RoundCash_Fifteen(b *testing.B) {
-	const want = "6.30"
-	for i := 0; i < b.N; i++ {
-		val := New(635, -2)
-		if have := val.StringFixedCash(15); have != want {
-			b.Fatalf("\nHave: %q\nWant: %q", have, want)
-		}
-	}
 }
 
 func TestDecimal_Mod(t *testing.T) {
@@ -2138,22 +2067,6 @@ func TestDecimal_Coefficient(t *testing.T) {
 	co.Set(big.NewInt(0))
 	if d.IntPart() != 123 {
 		t.Error("Modifying coefficient modified Decimal; Got:", d)
-	}
-}
-
-type DecimalSlice []Decimal
-
-func (p DecimalSlice) Len() int           { return len(p) }
-func (p DecimalSlice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
-func (p DecimalSlice) Less(i, j int) bool { return p[i].Cmp(p[j]) < 0 }
-func Benchmark_Cmp(b *testing.B) {
-	decimals := DecimalSlice([]Decimal{})
-	for i := 0; i < 1000000; i++ {
-		decimals = append(decimals, New(int64(i), 0))
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		sort.Sort(decimals)
 	}
 }
 
